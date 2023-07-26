@@ -1,280 +1,351 @@
-/************************************************************************************************
-Copyright (c) 2022-2023, Laboratorio de Microprocesadores
-Facultad de Ciencias Exactas y Tecnología, Universidad Nacional de Tucumán
-https://www.microprocesadores.unt.edu.ar/
+/* Copyright 2022, Laboratorio de Microprocesadores
+ * Facultad de Ciencias Exactas y Tecnología
+ * Universidad Nacional de Tucuman
+ * http://www.microprocesadores.unt.edu.ar/
+ * Copyright 2023, Guillermo Nicolás Brito <guillermonbrito@gmail.com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from this
+ *    software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
-Copyright (c) 2022-2023, Esteban Volentini <evolentini@herrera.unt.edu.ar>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
-associated documentation files (the "Software"), to deal in the Software without restriction,
-including without limitation the rights to use, copy, modify, merge, publish, distribute,
-sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial
-portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
-NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
-OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-SPDX-License-Identifier: MIT
-*************************************************************************************************/
-
-/** @file
- ** @brief Simple sample of use FreeROTS with MUJU hal functions
- **
- ** @addtogroup sample-freertos FreeRTOS Sample
- ** @ingroup samples
- ** @brief Samples applications with MUJU Framwork
+/** \brief Ejemplo del uso de HAL y board support.
+ *
+ ** \addtogroup main MAIN
+ ** \brief En este trabajo pŕactico se diseña una gestión para el poncho de la placa EDU-CIAA-NXP
  ** @{ */
 
 /* === Headers files inclusions =============================================================== */
 
-#include "bsp.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "semphr.h"
-#include <string.h>
+#include "bspreloj.h"
+#include "reloj.h"
+#include "controlbcd.h"
+#include <stdbool.h>
+#include <stddef.h>
 
 /* === Macros definitions ====================================================================== */
-
+#define ParpadearDigitos(from, to, frec) DisplayFlashDigits(board->display, from, to, frec)
+#define AlternarPunto(punto)             DisplayToggleDot(board->display, punto)
 /* === Private data type declarations ========================================================== */
 
-/**
- * @brief Enumeration with color sequence of RGB led
- */
-typedef enum rgb_color_e {
-    LED_RED_ON = 0, /**< Red led is On */
-    LED_RED_OFF,    /**< Red led is Off */
-    LED_GREEN_ON,   /**< Green led is On */
-    LED_GREEN_OFF,  /**< Green led is Off */
-    LED_BLUE_ON,    /**< Blue led is On */
-    LED_BLUE_OFF,   /**< Blue led is Off */
-} rgb_color_t;
+typedef enum
+{
+    SIN_CONFIGURAR,
+    MOSTRANDO_HORA,
+    AJUSTANDO_MINUTOS_ACTUAL,
+    AJUSTANDO_HORAS_ACTUAL,
+    AJUSTANDO_MINUTOS_ALARMA,
+    AJUSTANDO_HORAS_ALARMA,
+} modo_t;
 
 /* === Private variable declarations =========================================================== */
 
 /* === Private function declarations =========================================================== */
 
-/**
- * @brief Function to handle events of serial port used as console by board
- *
- * @param  console  Pointer to structure with descriptor of serial port that raises the event
- * @param  status   Pointer to structure with flags that raises the event
- * @param  data     Pointer to user data declared when handler event has installed
- */
-static void ConsoleEvent(hal_sci_t console, sci_status_t status, void * data);
-
-/**
- * @brief Function to make a blocking sending of a string through the serial port used as console
- *
- * @param  console  Pointer to structure with descriptor of serial port used as console
- * @param  message  Pointer to string to send by serial port used as console
- */
-static void ConsoleSend(hal_sci_t console, char const * message);
-
-/**
- * @brief Function to flash RGB led in sequence
- *
- * @param  object   Pointer to board structure, used as parameter when task created
- */
-static void FlashTask(void * object);
-
-/**
- * @brief Function to switch on and off a led with two keys
- *
- * @param  object   Pointer to board structure, used as parameter when task created
- */
-static void SwitchTask(void * object);
-
-/**
- * @brief Function to switch on and off a led with a single key
- *
- * @param  object   Pointer to board structure, used as parameter when task created
- */
-static void ToggleTask(void * object);
-
-/**
- * @brief Function to handle events of gpio bit used by a key
- *
- * @param  gpio     Gpio input used by the key that rise event
- * @param  rissing  Flag to indicate if is an rissing edge or and falling edge
- * @param  data     Pointer to board structure, used as parameter when handler installed
- */
-static void KeyEvent(hal_gpio_bit_t gpio, bool rissing, void * object);
+void ActivarAlarma(bool estado);
 
 /* === Public variable definitions ============================================================= */
 
+static board_t board;
+static clock_t reloj;
+static modo_t modo;
+static bool AlarmaActivada = 0;
+static uint32_t count3s = 0;
+static uint32_t count30s = 0;
+static uint8_t entrada[6] = {0, 0, 0, 0, 0, 0};
+
 /* === Private variable definitions ============================================================ */
-
-/**
- * @brief Constant with led on message to send by console
- */
-static const char LED_IS_ON[] = "Led 1 is on\n";
-
-/**
- * @brief Constant with led off message to send by console
- */
-static const char LED_IS_OFF[] = "Led 1 is off\n";
-
-/**
- * @brief Constant with led toggle message to send by console
- */
-static const char LED_TOGGLED[] = "Led 2 was taggled\n";
-
-/**
- * @brief Mutex to protect serial console transmission
- */
-static SemaphoreHandle_t console_mutex;
 
 /* === Private function implementation ========================================================= */
 
-static void ConsoleEvent(hal_sci_t console, sci_status_t status, void * data) {
-    board_t board = data;
-    char key;
-    uint8_t received;
+void ActivarAlarma(bool estado)
+{
+    AlarmaActivada = estado;
 
-    if (status->data_ready) {
-        received = SciReceiveData(console, &key, sizeof(key));
-        if (received) {
-            if (key == '1') {
-                GpioSetState(board->led_1, true);
-            } else if (key == '2') {
-                GpioSetState(board->led_1, false);
-            } else if (key == '3') {
-                GpioBitToogle(board->led_2);
-            }
-        }
+    if (estado)
+    {
+        DigitalOutputActivate(board->buzzer);
+    }
+    else
+    {
+        DigitalOutputDeactivate(board->buzzer);
     }
 }
 
-static void ConsoleSend(hal_sci_t console, char const * message) {
-    uint8_t pending = strlen(message);
-    uint8_t sended;
-
-    xSemaphoreTake(console_mutex, portMAX_DELAY);
-    while (pending) {
-        sended = SciSendData(console, message, pending);
-        message += sended;
-        pending -= sended;
-    }
-    xSemaphoreGive(console_mutex);
-}
-
-static void FlashTask(void * object) {
-    static rgb_color_t state = LED_BLUE_OFF;
-
-    board_t board = object;
-    led_rgb_t led = board->led_rgb;
-
-    while (true) {
-        state = (state + 1) % (LED_BLUE_OFF + 1);
-        switch (state) {
-        case LED_RED_ON:
-            GpioBitClear(led->green);
-            GpioBitClear(led->blue);
-            GpioBitSet(led->red);
-            break;
-        case LED_GREEN_ON:
-            GpioBitClear(led->red);
-            GpioBitClear(led->blue);
-            GpioBitSet(led->green);
-            break;
-        case LED_BLUE_ON:
-            GpioBitClear(led->red);
-            GpioBitClear(led->green);
-            GpioBitSet(led->blue);
-            break;
-        default:
-            GpioBitClear(led->red);
-            GpioBitClear(led->green);
-            GpioBitClear(led->blue);
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
-
-static void SwitchTask(void * object) {
-    board_t board = object;
-    hal_gpio_bit_t key_on = board->tec_1;
-    hal_gpio_bit_t key_off = board->tec_2;
-    hal_gpio_bit_t led = board->led_1;
-
-    while (true) {
-        if (GpioGetState(key_on) == 0) {
-            if (GpioGetState(led) != true) {
-                GpioSetState(led, true);
-                ConsoleSend(board->console, LED_IS_ON);
-            }
-        }
-        if (GpioGetState(key_off) == 0) {
-            if (GpioGetState(led) != false) {
-                GpioSetState(led, false);
-                ConsoleSend(board->console, LED_IS_OFF);
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(150));
-    }
-}
-
-static void ToggleTask(void * object) {
-    board_t board = object;
-    hal_gpio_bit_t key = board->tec_3;
-    hal_gpio_bit_t led = board->led_2;
-    static bool last_state = false;
-    bool current_state;
-
-    while (true) {
-        current_state = (GpioGetState(key) == 0);
-        if ((current_state) && (!last_state)) {
-            GpioBitToogle(led);
-            ConsoleSend(board->console, LED_TOGGLED);
-        }
-        last_state = current_state;
-        vTaskDelay(pdMS_TO_TICKS(150));
-    }
-}
-
-static void KeyEvent(hal_gpio_bit_t gpio, bool rissing, void * object) {
-    board_t board = object;
-    hal_gpio_bit_t led = board->led_3;
-
-    if (!rissing) {
-        GpioSetState(led, true);
-    } else {
-        GpioSetState(led, false);
+void CambiarModo(modo_t valor)
+{
+    modo = valor;
+    switch (modo)
+    {
+    case SIN_CONFIGURAR:
+        ParpadearDigitos(0, 3, 200);
+        break;
+    case MOSTRANDO_HORA:
+        ParpadearDigitos(0, 0, 0);
+        break;
+    case AJUSTANDO_MINUTOS_ACTUAL:
+        ParpadearDigitos(2, 3, 200);
+        break;
+    case AJUSTANDO_HORAS_ACTUAL:
+        ParpadearDigitos(0, 1, 200);
+        break;
+    case AJUSTANDO_MINUTOS_ALARMA:
+        ParpadearDigitos(2, 3, 200);
+        AlternarPunto(0);
+        AlternarPunto(1);
+        AlternarPunto(2);
+        AlternarPunto(3);
+        break;
+    case AJUSTANDO_HORAS_ALARMA:
+        ParpadearDigitos(0, 1, 100);
+        AlternarPunto(0);
+        AlternarPunto(1);
+        AlternarPunto(2);
+        AlternarPunto(3);
+        break;
+    default:
+        break;
     }
 }
 
 /* === Public function implementation ========================================================= */
 
-int main(void) {
-    /* Inicializaciones y configuraciones de dispositivos */
-    board_t board = BoardCreate();
+int main(void)
+{
+    board = BoardCreate();
+    reloj = ClockCreate(10, ActivarAlarma);
 
-    /* Creación de las tareas */
-    console_mutex = xSemaphoreCreateMutex();
+    SysTick_Init(1000);
+    CambiarModo(SIN_CONFIGURAR);
 
-    xTaskCreate(FlashTask, "FlashLed", 256, (void *)board, tskIDLE_PRIORITY + 2, NULL);
-    xTaskCreate(ToggleTask, "ToogleLed", 256, (void *)board, tskIDLE_PRIORITY + 1, NULL);
-    xTaskCreate(SwitchTask, "SwitchLed", 256, (void *)board, tskIDLE_PRIORITY + 1, NULL);
+    while (true)
+    {
+        if (DigitalInputHasActivated(board->aceptar))
+        {
+            count30s = 0;
+            if (modo == MOSTRANDO_HORA)
+            {
+                if (AlarmaActivada)
+                {
+                    AlarmPostpone(reloj, 5);
+                }
+                else
+                {
+                    AlarmEnamble(reloj, true);
+                }
+            }
+            else if (modo == AJUSTANDO_MINUTOS_ACTUAL)
+            {
+                CambiarModo(AJUSTANDO_HORAS_ACTUAL);
+            }
+            else if (modo == AJUSTANDO_HORAS_ACTUAL)
+            {
+                ClockSetTime(reloj, entrada, sizeof(entrada));
+                CambiarModo(MOSTRANDO_HORA);
+            }
+            else if (modo == AJUSTANDO_MINUTOS_ALARMA)
+            {
+                CambiarModo(AJUSTANDO_HORAS_ALARMA);
+                AlternarPunto(0);
+                AlternarPunto(1);
+                AlternarPunto(2);
+                AlternarPunto(3);
+            }
+            else if (modo == AJUSTANDO_HORAS_ALARMA)
+            {
+                AlarmSetTime(reloj, entrada, sizeof(entrada));
+                CambiarModo(MOSTRANDO_HORA);
+            }
+        }
 
-    SciSetEventHandler(board->console, ConsoleEvent, (void *)board);
-    GpioSetEventHandler(board->tec_4, KeyEvent, (void *)board, true, true);
+        if (DigitalInputHasActivated(board->cancelar))
+        {
+            count30s = 0;
+            if (modo == MOSTRANDO_HORA)
+            {
+                if (AlarmaActivada)
+                {
+                    AlarmCancel(reloj);
+                }
+                else
+                {
+                    AlarmEnamble(reloj, false);
+                }
+            }
+            else if (ClockGetTime(reloj, entrada, sizeof(entrada)))
+            {
+                CambiarModo(MOSTRANDO_HORA);
+            }
+            else
+            {
+                CambiarModo(SIN_CONFIGURAR);
+            }
+        }
+        // Falta 3 seg
+        if (DigitalInputGetState(board->ajustar_tiempo))
+        {
+            count30s = 0;
+            if ((count3s > 3000) && (modo <= MOSTRANDO_HORA))
+            {
+                CambiarModo(AJUSTANDO_MINUTOS_ACTUAL);
+                ClockGetTime(reloj, entrada, sizeof(entrada));
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+                count3s = 0;
+            }
+        }
 
-    /* Arranque del sistema operativo */
-    vTaskStartScheduler();
+        if (DigitalInputGetState(board->ajustar_alarma))
+        {
+            count30s = 0;
+            if ((count3s > 3000) && (modo <= MOSTRANDO_HORA))
+            {
+                CambiarModo(AJUSTANDO_MINUTOS_ALARMA);
+                AlarmGetTime(reloj, entrada, sizeof(entrada));
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+                AlternarPunto(0);
+                AlternarPunto(1);
+                AlternarPunto(2);
+                AlternarPunto(3);
+                count3s = 0;
+            }
+        }
 
-    /* vTaskStartScheduler solo retorna si se detiene el sistema operativo */
-    while (true) {
+        if (DigitalInputHasActivated(board->decrementar))
+        {
+            count30s = 0;
+            if ((modo == AJUSTANDO_MINUTOS_ACTUAL) || (modo == AJUSTANDO_MINUTOS_ALARMA))
+            {
+                DecrementarMinuto(entrada);
+            }
+            else if ((modo == AJUSTANDO_HORAS_ACTUAL) || (modo == AJUSTANDO_HORAS_ALARMA))
+            {
+                DecrementarHora(entrada);
+            }
+
+            if ((modo == AJUSTANDO_MINUTOS_ACTUAL) || (modo == AJUSTANDO_HORAS_ACTUAL))
+            {
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+            }
+            else if ((modo == AJUSTANDO_MINUTOS_ALARMA) || (modo == AJUSTANDO_HORAS_ALARMA))
+            {
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+                AlternarPunto(0);
+                AlternarPunto(1);
+                AlternarPunto(2);
+                AlternarPunto(3);
+            }
+        }
+
+        if (DigitalInputHasActivated(board->incrementar))
+        {
+            count30s = 0;
+            if ((modo == AJUSTANDO_MINUTOS_ACTUAL) || (modo == AJUSTANDO_MINUTOS_ALARMA))
+            {
+                IncrementarMinuto(entrada);
+            }
+            else if ((modo == AJUSTANDO_HORAS_ACTUAL) || (modo == AJUSTANDO_HORAS_ALARMA))
+            {
+                IncrementarHora(entrada);
+            }
+
+            if ((modo == AJUSTANDO_MINUTOS_ACTUAL) || (modo == AJUSTANDO_HORAS_ACTUAL))
+            {
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+            }
+            else if ((modo == AJUSTANDO_MINUTOS_ALARMA) || (modo == AJUSTANDO_HORAS_ALARMA))
+            {
+                DisplayWriteBCD(board->display, entrada, sizeof(entrada));
+                AlternarPunto(0);
+                AlternarPunto(1);
+                AlternarPunto(2);
+                AlternarPunto(3);
+            }
+        }
+
+        for (int index = 0; index < 1000; index++)
+        {
+            for (int delay = 0; delay < 250; delay++)
+            {
+                __asm("NOP");
+            }
+        }
+    }
+}
+
+void SysTick_Handler(void)
+{
+    bool current_value;
+    uint8_t hora[6];
+
+    DisplayRefresh(board->display);
+    current_value = ClockRefresh(reloj);
+    count30s++;
+
+    if (modo <= MOSTRANDO_HORA)
+    {
+        ClockGetTime(reloj, hora, sizeof(hora));
+        DisplayWriteBCD(board->display, hora, sizeof(hora));
+
+        if (current_value)
+        {
+            AlternarPunto(1);
+        }
+
+        if (AlarmGetState(reloj)) // Alarma habilitada
+        {
+            AlternarPunto(3);
+        }
+
+        if (AlarmaActivada)
+        {
+            AlternarPunto(0);
+        }
+
+        if (DigitalInputGetState(board->ajustar_tiempo) || DigitalInputGetState(board->ajustar_alarma))
+        {
+            count3s++;
+        }
+        else
+        {
+            count3s = 0;
+        }
     }
 
-    /* El valor de retorno es solo para evitar errores en el compilador*/
-    return 0;
+    if ((count30s > 30000) && (modo > MOSTRANDO_HORA))
+    {
+        if (ClockGetTime(reloj, entrada, sizeof(entrada)))
+        {
+            CambiarModo(MOSTRANDO_HORA);
+        }
+        else
+        {
+            CambiarModo(SIN_CONFIGURAR);
+        }
+        count30s = 0;
+    }
 }
 
 /* === End of documentation ==================================================================== */
