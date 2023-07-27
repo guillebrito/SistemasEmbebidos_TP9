@@ -87,7 +87,7 @@ static modo_t modo;
 static bool AlarmaActivada = 0;
 static uint32_t count3s = 0;
 static uint32_t count30s = 0;
-static uint8_t entrada[6] = {0, 0, 0, 0, 0, 0};
+// static uint8_t entrada[6] = {0, 0, 0, 0, 0, 0};
 
 /* === Private variable definitions ============================================================ */
 
@@ -145,6 +145,7 @@ void CambiarModo(modo_t valor)
 
 static void TareaPrincipal(void * pvParameters)
 {
+    uint8_t entrada[6];
 
     while (true)
     {
@@ -337,7 +338,7 @@ static void TareaRefresco(void * pvParameters)
 
         if ((count30s > 30000) && (modo > MOSTRANDO_HORA))
         {
-            if (ClockGetTime(reloj, entrada, sizeof(entrada)))
+            if (ClockGetTime(reloj, hora, sizeof(hora)))
             {
                 CambiarModo(MOSTRANDO_HORA);
             }
@@ -356,7 +357,7 @@ static void TareaRefresco(void * pvParameters)
 int main(void)
 {
     board = BoardCreate();
-    reloj = ClockCreate(1000, ActivarAlarma);
+    reloj = ClockCreate(10, ActivarAlarma);
 
     SysTick_Init(1000);
     CambiarModo(SIN_CONFIGURAR);
