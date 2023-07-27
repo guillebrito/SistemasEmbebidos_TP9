@@ -45,10 +45,18 @@
 #include "controlbcd.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include "FreeRTOS.h"
+#include "task.h"
 
 /* === Macros definitions ====================================================================== */
+
 #define ParpadearDigitos(from, to, frec) DisplayFlashDigits(board->display, from, to, frec)
 #define AlternarPunto(punto)             DisplayToggleDot(board->display, punto)
+
+// Tamaño de la pila de cada tarea
+#define PILA_TAREA_PRINCIPAL 512
+#define PILA_TAREA_REFRESCO  256
+
 /* === Private data type declarations ========================================================== */
 
 typedef enum
@@ -66,6 +74,10 @@ typedef enum
 /* === Private function declarations =========================================================== */
 
 void ActivarAlarma(bool estado);
+void CambiarModo(modo_t valor);
+
+static void TareaPrincipal(void * pvParameters);
+static void TareaRefresco(void * pvParameters);
 
 /* === Public variable definitions ============================================================= */
 
@@ -131,15 +143,8 @@ void CambiarModo(modo_t valor)
     }
 }
 
-/* === Public function implementation ========================================================= */
-
-int main(void)
+static void TareaPrincipal(void * pvParameters)
 {
-    board = BoardCreate();
-    reloj = ClockCreate(10, ActivarAlarma);
-
-    SysTick_Init(1000);
-    CambiarModo(SIN_CONFIGURAR);
 
     while (true)
     {
@@ -204,7 +209,7 @@ int main(void)
                 CambiarModo(SIN_CONFIGURAR);
             }
         }
-        // Falta 3 seg
+
         if (DigitalInputGetState(board->ajustar_tiempo))
         {
             count30s = 0;
@@ -284,67 +289,84 @@ int main(void)
                 AlternarPunto(3);
             }
         }
-
-        for (int index = 0; index < 1000; index++)
-        {
-            for (int delay = 0; delay < 250; delay++)
-            {
-                __asm("NOP");
-            }
-        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-void SysTick_Handler(void)
+static void TareaRefresco(void * pvParameters)
 {
+    TickType_t last_value = xTaskGetTickCount();
     bool current_value;
     uint8_t hora[6];
 
-    DisplayRefresh(board->display);
-    current_value = ClockRefresh(reloj);
-    count30s++;
-
-    if (modo <= MOSTRANDO_HORA)
+    while (true)
     {
-        ClockGetTime(reloj, hora, sizeof(hora));
-        DisplayWriteBCD(board->display, hora, sizeof(hora));
+        DisplayRefresh(board->display);
+        current_value = ClockRefresh(reloj);
+        count30s++;
 
-        if (current_value)
+        if (modo <= MOSTRANDO_HORA)
         {
-            AlternarPunto(1);
+            ClockGetTime(reloj, hora, sizeof(hora));
+            DisplayWriteBCD(board->display, hora, sizeof(hora));
+
+            if (current_value)
+            {
+                AlternarPunto(1);
+            }
+
+            if (AlarmGetState(reloj)) // Alarma habilitada
+            {
+                AlternarPunto(3);
+            }
+
+            if (AlarmaActivada)
+            {
+                AlternarPunto(0);
+            }
+
+            if (DigitalInputGetState(board->ajustar_tiempo) || DigitalInputGetState(board->ajustar_alarma))
+            {
+                count3s++;
+            }
+            else
+            {
+                count3s = 0;
+            }
         }
 
-        if (AlarmGetState(reloj)) // Alarma habilitada
+        if ((count30s > 30000) && (modo > MOSTRANDO_HORA))
         {
-            AlternarPunto(3);
+            if (ClockGetTime(reloj, entrada, sizeof(entrada)))
+            {
+                CambiarModo(MOSTRANDO_HORA);
+            }
+            else
+            {
+                CambiarModo(SIN_CONFIGURAR);
+            }
+            count30s = 0;
         }
-
-        if (AlarmaActivada)
-        {
-            AlternarPunto(0);
-        }
-
-        if (DigitalInputGetState(board->ajustar_tiempo) || DigitalInputGetState(board->ajustar_alarma))
-        {
-            count3s++;
-        }
-        else
-        {
-            count3s = 0;
-        }
+        vTaskDelayUntil(&last_value, pdMS_TO_TICKS(1));
     }
+}
 
-    if ((count30s > 30000) && (modo > MOSTRANDO_HORA))
+/* === Public function implementation ========================================================= */
+
+int main(void)
+{
+    board = BoardCreate();
+    reloj = ClockCreate(1000, ActivarAlarma);
+
+    SysTick_Init(1000);
+    CambiarModo(SIN_CONFIGURAR);
+
+    xTaskCreate(TareaPrincipal, "TareaPrincipal", PILA_TAREA_PRINCIPAL, NULL, tskIDLE_PRIORITY + 1, NULL);
+    xTaskCreate(TareaRefresco, "TareaRefresco", PILA_TAREA_REFRESCO, NULL, tskIDLE_PRIORITY, NULL);
+
+    vTaskStartScheduler();
+    while (true)
     {
-        if (ClockGetTime(reloj, entrada, sizeof(entrada)))
-        {
-            CambiarModo(MOSTRANDO_HORA);
-        }
-        else
-        {
-            CambiarModo(SIN_CONFIGURAR);
-        }
-        count30s = 0;
     }
 }
 
