@@ -357,7 +357,7 @@ static void TareaRefresco(void * pvParameters)
 int main(void)
 {
     board = BoardCreate();
-    reloj = ClockCreate(10, ActivarAlarma);
+    reloj = ClockCreate(1000, ActivarAlarma);
 
     SysTick_Init(1000);
     CambiarModo(SIN_CONFIGURAR);
